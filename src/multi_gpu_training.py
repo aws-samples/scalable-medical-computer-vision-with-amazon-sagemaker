@@ -259,12 +259,6 @@ def train(args, train_loader, val_loader, model, optimizer, device):
 
     logger.info(f"train completed, best_metric: {best_metric:.4f} at epoch: {best_metric_epoch}")
 
-    #if dist.get_rank() == 0:
-    #    # all processes should see same parameters as they all start from same
-    #    # random parameters and gradients are synchronized in backward passes,
-    #    # therefore, saving it in one process is sufficient
-    #    torch.save(model.state_dict(), os.path.join(args.model_dir, "final_model.pth"))
-
 
 def main():
     #parser = get_parser()
