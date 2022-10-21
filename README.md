@@ -1,5 +1,5 @@
 ## Scalable Medical CV with Amazon SageMaker 
-This project shows how we scaled a medical semantic segmentation training workload on terabytes of data from four days to four hours. We used Amazon SageMaker Processing for distributed decoding and augmentation of compressed 4D brain scans, Amazon FSx for Lusrtre to provide high performant data transfer from Amazon Simple Storage Service (S3) to compute hosts, and the SageMaker Distributed Data Parallel Training Library for multi-node data parallel neural network training. The data IO, transformation and network architecture are built using PyTorch and MONAI library.
+This example shows how we scaled a medical semantic segmentation training workload using MONAI's various dataset methods ([Dataset](https://docs.monai.io/en/stable/data.html#dataset), [PersistentDataset](https://docs.monai.io/en/stable/data.html#persistentdataset) and [CacheDataset](https://docs.monai.io/en/stable/data.html#cachedataset)) on single GPU device and using SageMaker's distributed training library (data parallel) on multiple GPU devices. The data IO, transformation and network architecture are built using PyTorch and MONAI library.
 
 
 ## Security
