@@ -12,8 +12,24 @@ import numpy as np
 import nibabel as nib
 from monai.config import print_config
 from monai.utils import set_determinism
-from monai.transforms import Compose, Activations, AsDiscrete
 from monai.data import partition_dataset, Dataset, DataLoader 
+from monai.transforms import (
+    Activations,
+    AsChannelFirstd,
+    AsDiscrete,
+    CenterSpatialCropd,
+    Compose,
+    LoadImaged,
+    MapTransform,
+    NormalizeIntensityd,
+    Orientationd,
+    RandFlipd,
+    RandScaleIntensityd,
+    RandShiftIntensityd,
+    RandSpatialCropd,
+    Spacingd,
+    ToTensord,
+)
 
 from smdistributed.dataparallel.torch.parallel.distributed import DistributedDataParallel
 import smdistributed.dataparallel.torch.distributed as dist
@@ -27,82 +43,137 @@ print_config()
 # initialize the distributed training process, every GPU runs in a process
 dist.init_process_group()
 
+class ConvertToMultiChannelBasedOnBratsClassesd(MapTransform):
+    """
+    Convert labels to multi channels based on brats classes:
+    label 1 is the peritumoral edema
+    label 2 is the GD-enhancing tumor
+    label 3 is the necrotic and non-enhancing tumor core
+    The possible classes are TC (Tumor core), WT (Whole tumor)
+    and ET (Enhancing tumor).
 
-class ProcessedDataset(Dataset):
-    def __init__(self, data_list):
-        self.data_list = data_list
-        
-    def __len__(self):
-        return len(self.data_list)
-    
-    def __getitem__(self, index):
-        file_path = self.data_list[index]
-        file = torch.load(file_path)
-        image = file['image']
-        label = file['label']
-        return (image, label)
+    """
+
+    def __call__(self, data):
+        d = dict(data)
+        for key in self.keys:
+            result = []
+            # merge label 2 and label 3 to construct TC
+            result.append(np.logical_or(d[key] == 2, d[key] == 3))
+            # merge labels 1, 2 and 3 to construct WT
+            result.append(
+                np.logical_or(
+                    np.logical_or(d[key] == 2, d[key] == 3), d[key] == 1
+                )
+            )
+            # label 2 is ET
+            result.append(d[key] == 2)
+            d[key] = np.stack(result, axis=0).astype(np.float32)
+        return d
 
 def get_data_loaders(args):
     """
-    This function loads input/output file names, builds a MONAI SmartCacheDataset
-    (child of torch dataset) and a DistributedSampler for them. It returns a DataLoader 
-    """
-
-    # glob learning dataset dir
-    data_list = sorted(glob(os.path.join(args.train, '*.pt')))
-    if dist.get_rank() == 0:
-        logger.info('Total file pairs: %d' % (len(data_list)))
+    This function loads input/output file paths, builds a MONAI DataLoader
+    from a PersistentDataset (child of torch dataset) for them.
+    It returns a DataLoader for train and validation splits 
+    """    
+    images = sorted(glob(os.path.join(args.train, 'imagesTr', 'BRATS*.nii.gz')))
+    segs = sorted(glob(os.path.join(args.train, 'labelsTr', 'BRATS*.nii.gz')))
+    data_list = [{"image": img, "label": seg} for img, seg in zip(images, segs)]
+    logger.info('Total file pairs: %d' % (len(data_list)))
     
     # split the data_list into train and val
     train_files, val_files = partition_dataset(
         data_list,
-        ratios = [0.99, 0.01],
-        shuffle = True,
-        seed = args.seed
-        )
-    if dist.get_rank() == 0:
-        logger.info('# of train and val: %d/%d' % (len(train_files), len(val_files)))
+        ratios=[0.99, 0.01],
+        shuffle=True,
+        seed=args.seed
+    )
+    logger.info('# of train and val: %d/%d' % (len(train_files), len(val_files)))
+
+    # define transforms for image and segmentation
+    train_transforms = Compose(
+        [
+            # load 4 Nifti images and stack them together
+            LoadImaged(keys=["image", "label"]),
+            AsChannelFirstd(keys="image"),
+            ConvertToMultiChannelBasedOnBratsClassesd(keys="label"),
+            Spacingd(
+                keys=["image", "label"],
+                pixdim=(1.5, 1.5, 2.0),
+                mode=("bilinear", "nearest"),
+            ),
+            Orientationd(keys=["image", "label"], axcodes="RAS"),
+            RandSpatialCropd(
+                keys=["image", "label"], roi_size=[128, 128, 64], random_size=False
+            ),
+            NormalizeIntensityd(keys="image", nonzero=True, channel_wise=True),
+            RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=0),
+            RandScaleIntensityd(keys="image", factors=0.1, prob=0.5),
+            RandShiftIntensityd(keys="image", offsets=0.1, prob=0.5),
+            ToTensord(keys=["image", "label"]),
+        ]
+    )
+    
+    val_transforms = Compose(
+        [
+            LoadImaged(keys=["image", "label"]),
+            AsChannelFirstd(keys="image"),
+            ConvertToMultiChannelBasedOnBratsClassesd(keys="label"),
+            Spacingd(
+                keys=["image", "label"],
+                pixdim=(1.5, 1.5, 2.0),
+                mode=("bilinear", "nearest"),
+            ),
+            Orientationd(keys=["image", "label"], axcodes="RAS"),
+            CenterSpatialCropd(keys=["image", "label"], roi_size=[128, 128, 64]),
+            NormalizeIntensityd(keys="image", nonzero=True, channel_wise=True),
+            ToTensord(keys=["image", "label"]),
+        ]
+    )
     
     # create training/validation data loaders
     if dist.get_rank() == 0:
         logger.info('Defining Train Datasets')
-    train_ds = ProcessedDataset(data_list=train_files)
+        
+    train_ds = Dataset(data=train_files, transform=train_transforms)
+    
     if dist.get_rank() == 0:
         logger.info('Defining Validation Dataset')
-    val_ds = ProcessedDataset(data_list=val_files)
+        
+    val_ds = Dataset(data=val_files, transform=val_transforms)
 
     # create a training data sampler
     if dist.get_rank() == 0:
         logger.info('DistributedSampler')
+        
     train_sampler = DistributedSampler(
-        train_ds,
-        num_replicas=args.world_size,
-        rank=args.host_rank
-        )
+                        train_ds,
+                        num_replicas=args.world_size,
+                        rank=args.host_rank)
     val_sampler = DistributedSampler(
-        val_ds,
-        num_replicas=args.world_size,
-        rank=args.host_rank
-        )
+                        val_ds,
+                        num_replicas=args.world_size,
+                        rank=args.host_rank)
     
     if dist.get_rank() == 0:
         logger.info('Defining DataLoader')
+        
     train_loader = DataLoader(
-        train_ds,
-        batch_size=args.batch_size,
-        shuffle=False,
-        num_workers=args.num_workers,
-        pin_memory=True, # was True
-        sampler=train_sampler
-        )
+                        train_ds,
+                        batch_size=args.batch_size,
+                        shuffle=False,
+                        num_workers=args.num_workers,
+                        pin_memory=True, # was True
+                        sampler=train_sampler)
+    
     val_loader = DataLoader(
-        val_ds,
-        batch_size=args.batch_size,
-        shuffle=False,
-        num_workers=args.num_workers,
-        pin_memory=True, # was True
-        sampler=val_sampler
-        )
+                        val_ds,
+                        batch_size=args.batch_size,
+                        shuffle=False,
+                        num_workers=args.num_workers,
+                        pin_memory=True, # was True
+                        sampler=val_sampler)
 
     return train_loader, val_loader
 
@@ -133,10 +204,9 @@ def get_model(args):
 
 def train(args, train_loader, val_loader, model, optimizer, device):
     loss_function = monai.losses.DiceLoss(
-        to_onehot_y=False,
-        sigmoid=True,
-        squared_pred=True
-    ).to(device)
+                        to_onehot_y=False,
+                        sigmoid=True,
+                        squared_pred=True).to(device)
 
     # Training epochs
     val_interval = 5
@@ -159,15 +229,11 @@ def train(args, train_loader, val_loader, model, optimizer, device):
         
         train_loader.sampler.set_epoch(epoch)
         #epoch_len = len(train_ds) // (train_loader.batch_size * args.world_size)
-        
             
         for batch_data in train_loader:
             step += 1
             
-            inputs, labels = batch_data
-            inputs = inputs.to(device)
-            labels = labels.to(device)
-            #inputs, labels = batch_data["image"].to(device), batch_data["label"].to(device)
+            inputs, labels = batch_data["image"].to(device), batch_data["label"].to(device)
 
             optimizer.zero_grad()
             outputs = model(inputs)
@@ -202,12 +268,8 @@ def train(args, train_loader, val_loader, model, optimizer, device):
                     metric_count_tc
                 ) = metric_count_wt = metric_count_et = 0
                 for val_data in val_loader:
-                    #val_inputs, val_labels = (val_data["image"].to(device), val_data["label"].to(device))
-                    val_inputs, val_labels = val_data
-                    val_inputs = val_inputs.to(device)
-                    val_labels = val_labels.to(device)
-
-
+                    val_inputs, val_labels = (val_data["image"].to(device), 
+                                              val_data["label"].to(device))
                     
                     val_outputs = model(val_inputs)
                     val_outputs = post_trans(val_outputs)
