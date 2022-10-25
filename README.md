@@ -189,6 +189,9 @@ By setting `instance_count=1` and `instance_type='ml.p3.16xlarge'`, which is [on
 ## Clean up
 To avoid resources incurring charges, remove the data in the Amazon S3 bucket, and the kernel gateway apps from SageMaker Studio. Instances behind SageMaker training jobs are automatically shut down at the end of the jobs.
 
+## Reference
+This example is an adaptation from a full solution presented in the blog post series [Scalable Medical Computer Vision Model Training with Amazon SageMaker part 1](https://aws.amazon.com/blogs/industries/scalable-medical-computer-vision-model-training-with-amazon-sagemaker-part-1/), [part 2](https://aws.amazon.com/blogs/industries/scalable-medical-computer-vision-model-training-with-amazon-sagemaker-part-2/).
+
 ## Security
 
 See [CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications) for more information.
