@@ -260,9 +260,10 @@ def train(args, train_loader, val_loader, model, optimizer, device):
             model.eval()
             with torch.no_grad():
                 dice_metric = monai.metrics.DiceMetric(include_background=True, reduction="mean")
-                post_trans = Compose(
-                    [Activations(sigmoid=True), AsDiscrete(threshold_values=True)]
-                )
+                dice_metric_tc = monai.metrics.DiceMetric(include_background=True, reduction="mean")
+                dice_metric_wt = monai.metrics.DiceMetric(include_background=True, reduction="mean")
+                dice_metric_et = monai.metrics.DiceMetric(include_background=True, reduction="mean")
+                post_trans = Compose([Activations(sigmoid=True), AsDiscrete(threshold=True)])
                 metric_sum = metric_sum_tc = metric_sum_wt = metric_sum_et = 0.0
                 metric_count = (
                     metric_count_tc
@@ -274,37 +275,26 @@ def train(args, train_loader, val_loader, model, optimizer, device):
                     val_outputs = model(val_inputs)
                     val_outputs = post_trans(val_outputs)
                     # compute overall mean dice
-                    value, not_nans = dice_metric(y_pred=val_outputs, y=val_labels)
-                    not_nans = not_nans.item()
-                    metric_count += not_nans
-                    metric_sum += value.item() * not_nans
+                    dice_metric(y_pred=val_outputs, y=val_labels)
                     # compute mean dice for TC
-                    value_tc, not_nans = dice_metric(y_pred=val_outputs[:, 0:1], 
-                                                     y=val_labels[:, 0:1])
-                    not_nans = not_nans.item()
-                    metric_count_tc += not_nans
-                    metric_sum_tc += value_tc.item() * not_nans
+                    dice_metric_tc(y_pred=val_outputs[:, 0:1], y=val_labels[:, 0:1])
                     # compute mean dice for WT
-                    value_wt, not_nans = dice_metric(y_pred=val_outputs[:, 1:2], 
-                                                     y=val_labels[:, 1:2])
-                    not_nans = not_nans.item()
-                    metric_count_wt += not_nans
-                    metric_sum_wt += value_wt.item() * not_nans
+                    dice_metric_wt(y_pred=val_outputs[:, 1:2], y=val_labels[:, 1:2])
                     # compute mean dice for ET
-                    value_et, not_nans = dice_metric(y_pred=val_outputs[:, 2:3], 
-                                                     y=val_labels[:, 2:3])
-                    not_nans = not_nans.item()
-                    metric_count_et += not_nans
-                    metric_sum_et += value_et.item() * not_nans
+                    dice_metric_et(y_pred=val_outputs[:, 2:3], y=val_labels[:, 2:3])
 
-                metric = metric_sum / metric_count
+                metric = dice_metric.aggregate().item()
                 metric_values.append(metric)
-                metric_tc = metric_sum_tc / metric_count_tc
+                dice_metric.reset()
+                metric_tc = dice_metric_tc.aggregate().item()
                 metric_values_tc.append(metric_tc)
-                metric_wt = metric_sum_wt / metric_count_wt
+                dice_metric_tc.reset()
+                metric_wt = dice_metric_wt.aggregate().item()
                 metric_values_wt.append(metric_wt)
-                metric_et = metric_sum_et / metric_count_et
+                dice_metric_wt.reset()
+                metric_et = dice_metric_et.aggregate().item()
                 metric_values_et.append(metric_et)
+                dice_metric_et.reset()
                 if metric > best_metric:
                     best_metric = metric
                     best_metric_epoch = epoch + 1
