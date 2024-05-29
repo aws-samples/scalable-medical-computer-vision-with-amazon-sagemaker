@@ -15,7 +15,7 @@ from monai.utils import set_determinism
 from monai.data import partition_dataset, Dataset, CacheDataset, PersistentDataset, SmartCacheDataset, DataLoader 
 from monai.transforms import (
     Activations,
-    AsChannelFirstd,
+    EnsureChannelFirstd,
     AsDiscrete,
     CenterSpatialCropd,
     Compose,
@@ -89,7 +89,7 @@ def get_data_loaders(args):
         [
             # load 4 Nifti images and stack them together
             LoadImaged(keys=["image", "label"]),
-            AsChannelFirstd(keys="image"),
+            EnsureChannelFirstd(keys="image"),
             ConvertToMultiChannelBasedOnBratsClassesd(keys="label"),
             Spacingd(
                 keys=["image", "label"],
@@ -111,7 +111,7 @@ def get_data_loaders(args):
     val_transforms = Compose(
         [
             LoadImaged(keys=["image", "label"]),
-            AsChannelFirstd(keys="image"),
+            EnsureChannelFirstd(keys="image"),
             ConvertToMultiChannelBasedOnBratsClassesd(keys="label"),
             Spacingd(
                 keys=["image", "label"],
@@ -184,7 +184,7 @@ def get_model(args):
     logger.info('Defining network')    
     device = torch.device("cuda") # WARNING: do not assign local rank here, i.e. cuda:0
     model = monai.networks.nets.UNet(
-        dimensions=3,
+        spatial_dims=3,
         in_channels=4, 
         out_channels=3, 
         channels=(16, 32, 64, 128, 256),
